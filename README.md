@@ -141,6 +141,8 @@ export CLAUDE_CODE_MAX_OUTPUT_TOKENS=64000
 docker build -t shannon:latest .
 ```
 
+> **Rebuilding after changes?** Re-run the same `docker build -t shannon:latest .` command from the repo root to bake your latest source edits into a fresh image. If you want to keep older images, tag them differently, e.g., `docker build -t shannon:dev-$(date +%Y%m%d) .`.
+
 #### Prepare Your Repository
 
 Shannon is designed for **web application security testing** and expects all application code to be available in a single directory structure. This works well for:
