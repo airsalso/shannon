@@ -105,6 +105,17 @@ Shannon is available in two editions:
 
 You need either a **Claude Code OAuth token** or an **Anthropic API key** to run Shannon. Get your token from the [Anthropic Console](https://console.anthropic.com) and pass it to Docker via the `-e` flag.
 
+> Running a local model instead? Set `SHANNON_USE_LOCAL_LLM=true` and point Shannon at any OpenAI-compatible endpoint (e.g., a vLLM server) with:
+>
+> ```bash
+> export SHANNON_USE_LOCAL_LLM=true
+> export LOCAL_LLM_BASE_URL=http://localhost:8000/v1
+> export LOCAL_LLM_MODEL=gpt-oss-20b  # or your model name
+> # Optional: LOCAL_LLM_API_KEY if your gateway expects a token
+> ```
+>
+> When enabled, Shannon bypasses the Claude Agent SDK and calls your endpoint with a simple chat completion request.
+
 ### Environment Configuration (Recommended)
 
 To prevent Claude Code from hitting token limits during long report generation, set the max output tokens environment variable:
