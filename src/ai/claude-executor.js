@@ -21,6 +21,66 @@ import { generateSessionLogPath } from '../session-manager.js';
 import { AuditSession } from '../audit/index.js';
 import { createShannonHelperServer } from '../../mcp-server/src/index.js';
 
+const useLocalLLM = process.env.SHANNON_USE_LOCAL_LLM === 'true';
+
+async function* localLLMQuery({ prompt, options }) {
+  const startTime = Date.now();
+  const model = options.model || process.env.LOCAL_LLM_MODEL || 'gpt-oss-20b';
+  const baseUrl = process.env.LOCAL_LLM_BASE_URL || 'http://localhost:8000/v1';
+  const apiKey = process.env.LOCAL_LLM_API_KEY || 'sk-local';
+
+  // Emit a minimal init event to keep downstream logging consistent
+  yield {
+    type: 'system',
+    subtype: 'init',
+    model,
+    permissionMode: options.permissionMode,
+    mcp_servers: Object.keys(options.mcpServers || {}).map(name => ({ name, status: 'local-llm' }))
+  };
+
+  const payload = {
+    model,
+    messages: [{ role: 'user', content: prompt }],
+    max_tokens: 2048,
+    temperature: 0.1,
+    stream: false
+  };
+
+  const headers = {
+    'Content-Type': 'application/json'
+  };
+  if (apiKey) {
+    headers.Authorization = `Bearer ${apiKey}`;
+  }
+
+  const response = await fetch(`${baseUrl}/chat/completions`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Local LLM request failed: ${response.status} ${errorText}`);
+  }
+
+  const data = await response.json();
+  const content = data?.choices?.[0]?.message?.content || '';
+
+  yield {
+    type: 'assistant',
+    message: { content }
+  };
+
+  const duration = Date.now() - startTime;
+  yield {
+    type: 'result',
+    result: { output: content },
+    total_cost_usd: 0,
+    duration_ms: duration
+  };
+}
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
@@ -192,8 +252,12 @@ async function runClaudePrompt(prompt, sourceDir, allowedTools = 'Read', context
       };
     }
 
+    const modelName = useLocalLLM
+      ? process.env.LOCAL_LLM_MODEL || 'gpt-oss-20b'
+      : process.env.SHANNON_MODEL || 'claude-sonnet-4-5-20250929';
+
     const options = {
-      model: 'claude-sonnet-4-5-20250929', // Use latest Claude 4.5 Sonnet
+      model: modelName,
       maxTurns: 10_000, // Maximum turns for autonomous work
       cwd: sourceDir, // Set working directory using SDK option
       permissionMode: 'bypassPermissions', // Bypass all permission checks for pentesting
@@ -202,8 +266,11 @@ async function runClaudePrompt(prompt, sourceDir, allowedTools = 'Read', context
 
     // SDK Options only shown for verbose agents (not clean output)
     if (!useCleanOutput) {
-      console.log(chalk.gray(`    SDK Options: maxTurns=${options.maxTurns}, cwd=${sourceDir}, permissions=BYPASS`));
+      const provider = useLocalLLM ? 'local-llm (OpenAI-compatible)' : 'claude-agent-sdk';
+      console.log(chalk.gray(`    SDK Options: provider=${provider}, model=${modelName}, maxTurns=${options.maxTurns}, cwd=${sourceDir}, permissions=BYPASS`));
     }
+
+    const queryFn = useLocalLLM ? localLLMQuery : query;
 
     let result = null;
     let messages = [];
@@ -220,7 +287,7 @@ async function runClaudePrompt(prompt, sourceDir, allowedTools = 'Read', context
     const HEARTBEAT_INTERVAL = 30000; // 30 seconds
 
     try {
-      for await (const message of query({ prompt: fullPrompt, options })) {
+      for await (const message of queryFn({ prompt: fullPrompt, options })) {
         messageCount++;
 
         // Periodic heartbeat for long-running agents (only when loader is disabled)
