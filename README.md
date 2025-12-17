@@ -81,6 +81,7 @@ Shannon is available in two editions:
   - [Prerequisites](#prerequisites)
   - [Authentication Setup](#authentication-setup)
   - [Quick Start with Docker](#quick-start-with-docker)
+  - [Quick Start without Docker](#quick-start-without-docker)
   - [Configuration (Optional)](#configuration-optional)
   - [Usage Patterns](#usage-patterns)
   - [Output and Results](#output-and-results)
@@ -98,8 +99,10 @@ Shannon is available in two editions:
 
 ### Prerequisites
 
-- **Claude Console account with credits** - Required for AI-powered analysis
-- **Docker installed** - Primary deployment method
+- **Claude Console account with credits** - Required for AI-powered analysis (or configure a local OpenAI-compatible LLM; see below)
+- **Docker installed** - Primary deployment method (optional; see "Quick Start without Docker")
+- **Node.js 20+ and npm** - Needed if running without Docker
+- **Security tooling installed locally** - `nmap`, `subfinder`, `whatweb`, and `schemathesis` must be on your PATH for non-Docker runs
 
 ### Authentication Setup
 
@@ -227,6 +230,65 @@ docker run --rm -it \
       "/app/repos/your-app" \
       --config /app/configs/example-config.yaml
 ```
+
+### Quick Start without Docker
+
+You can run Shannon directly on your host—Docker is not required. Make sure the required security tools (`nmap`, `subfinder`, `whatweb`, `schemathesis`) are installed locally and available on your PATH. Some tools (e.g., `nmap` raw scans) may require root privileges or elevated capabilities on your OS.
+
+1) **Clone and install dependencies**
+
+```bash
+git clone https://github.com/KeygraphHQ/shannon.git
+cd shannon
+npm install
+```
+
+2) **Prepare your application code** (same layout as the Docker flow)
+
+```bash
+mkdir -p repos
+git clone https://github.com/your-org/your-app.git repos/your-app
+# or copy an existing local repo: cp -r /path/to/repo repos/your-app
+```
+
+3) **Export credentials for your provider** (choose one)
+
+- Claude Console OAuth token:
+
+  ```bash
+  export CLAUDE_CODE_OAUTH_TOKEN="<token>"
+  export CLAUDE_CODE_MAX_OUTPUT_TOKENS=64000
+  ```
+
+- Anthropic API key:
+
+  ```bash
+  export ANTHROPIC_API_KEY="<key>"
+  export CLAUDE_CODE_MAX_OUTPUT_TOKENS=64000
+  ```
+
+- Local OpenAI-compatible endpoint (e.g., vLLM):
+
+  ```bash
+  export SHANNON_USE_LOCAL_LLM=true
+  export LOCAL_LLM_BASE_URL=http://localhost:8000/v1
+  export LOCAL_LLM_MODEL=gpt-oss-20b
+  # export LOCAL_LLM_API_KEY=...  # only if your gateway requires it
+  ```
+
+4) **Run the pentest from the repo root**
+
+```bash
+npm start -- "https://your-app.com/" "$(pwd)/repos/your-app" --config configs/example-config.yaml
+```
+
+The CLI entrypoint is `shannon.mjs`, so you can also invoke it directly (it uses a `zx` shebang):
+
+```bash
+./shannon.mjs "https://your-app.com/" "$(pwd)/repos/your-app" --config configs/example-config.yaml
+```
+
+Results, session state, and reports will be written to the local `sessions/` and `deliverables/` directories.
 
 ### Configuration (Optional)
 
