@@ -10,6 +10,9 @@ import Ajv from 'ajv';
 import addFormats from 'ajv-formats';
 import { PentestError } from './error-handling.js';
 
+const createConfigError = (message, context = {}) =>
+  new PentestError(message, 'config', false, context);
+
 // Initialize AJV with formats
 const ajv = new Ajv({ allErrors: true, verbose: true });
 addFormats(ajv);
@@ -21,10 +24,8 @@ try {
   const schemaContent = await fs.readFile(schemaPath, 'utf8');
   configSchema = JSON.parse(schemaContent);
 } catch (error) {
-  throw new PentestError(
+  throw createConfigError(
     `Failed to load configuration schema: ${error.message}`,
-    'config',
-    false,
     { schemaPath: '../configs/config-schema.json', originalError: error.message }
   );
 }
@@ -46,14 +47,17 @@ export const parseConfig = async (configPath) => {
   try {
     // File existence check
     if (!await fs.pathExists(configPath)) {
-      throw new Error(`Configuration file not found: ${configPath}`);
+      throw createConfigError('Configuration file not found', { configPath });
     }
 
     // File size check (prevent extremely large files)
     const stats = await fs.stat(configPath);
     const maxFileSize = 1024 * 1024; // 1MB
     if (stats.size > maxFileSize) {
-      throw new Error(`Configuration file too large: ${stats.size} bytes (maximum: ${maxFileSize} bytes)`);
+      throw createConfigError(
+        'Configuration file too large',
+        { configPath, fileSize: stats.size, maxFileSize }
+      );
     }
 
     // Read file content
@@ -61,7 +65,7 @@ export const parseConfig = async (configPath) => {
     
     // Basic content validation
     if (!configContent.trim()) {
-      throw new Error('Configuration file is empty');
+      throw createConfigError('Configuration file is empty', { configPath });
     }
 
     // Parse YAML with safety options
@@ -73,12 +77,18 @@ export const parseConfig = async (configPath) => {
         filename: configPath
       });
     } catch (yamlError) {
-      throw new Error(`YAML parsing failed: ${yamlError.message}`);
+      throw createConfigError('YAML parsing failed', {
+        configPath,
+        originalError: yamlError.message
+      });
     }
 
     // Additional safety check
     if (config === null || config === undefined) {
-      throw new Error('Configuration file resulted in null/undefined after parsing');
+      throw createConfigError(
+        'Configuration file resulted in null/undefined after parsing',
+        { configPath }
+      );
     }
 
     // Validate the configuration structure and content
@@ -86,17 +96,14 @@ export const parseConfig = async (configPath) => {
 
     return config;
   } catch (error) {
-    // Enhance error message with context
-    if (error.message.startsWith('Configuration file not found') ||
-        error.message.startsWith('YAML parsing failed') ||
-        error.message.includes('must be') ||
-        error.message.includes('exceeds maximum')) {
-      // These are already well-formatted errors, re-throw as-is
+    if (error instanceof PentestError) {
       throw error;
-    } else {
-      // Wrap other errors with context
-      throw new Error(`Failed to parse configuration file '${configPath}': ${error.message}`);
     }
+
+    throw createConfigError(
+      `Failed to parse configuration file '${configPath}'`,
+      { configPath, originalError: error.message }
+    );
   }
 };
 
@@ -147,24 +154,14 @@ const performSecurityValidation = (config) => {
     
     // Check for dangerous patterns in credentials
     if (auth.credentials) {
-      for (const pattern of DANGEROUS_PATTERNS) {
-        if (pattern.test(auth.credentials.username)) {
-          throw new Error('authentication.credentials.username contains potentially dangerous pattern');
-        }
-        if (pattern.test(auth.credentials.password)) {
-          throw new Error('authentication.credentials.password contains potentially dangerous pattern');
-        }
-      }
+      ensureSafeValue(auth.credentials.username, 'authentication.credentials.username');
+      ensureSafeValue(auth.credentials.password, 'authentication.credentials.password');
     }
     
     // Check login flow for dangerous patterns
     if (auth.login_flow) {
       auth.login_flow.forEach((step, index) => {
-        for (const pattern of DANGEROUS_PATTERNS) {
-          if (pattern.test(step)) {
-            throw new Error(`authentication.login_flow[${index}] contains potentially dangerous pattern: ${pattern.source}`);
-          }
-        }
+        ensureSafeValue(step, `authentication.login_flow[${index}]`);
       });
     }
   }
@@ -186,16 +183,9 @@ const validateRulesSecurity = (rules, ruleType) => {
   if (!rules) return;
   
   rules.forEach((rule, index) => {
-    // Security validation
-    for (const pattern of DANGEROUS_PATTERNS) {
-      if (pattern.test(rule.url_path)) {
-        throw new Error(`rules.${ruleType}[${index}].url_path contains potentially dangerous pattern: ${pattern.source}`);
-      }
-      if (pattern.test(rule.description)) {
-        throw new Error(`rules.${ruleType}[${index}].description contains potentially dangerous pattern: ${pattern.source}`);
-      }
-    }
-    
+    ensureSafeValue(rule.url_path, `rules.${ruleType}[${index}].url_path`);
+    ensureSafeValue(rule.description, `rules.${ruleType}[${index}].description`);
+
     // Type-specific validation
     validateRuleTypeSpecific(rule, ruleType, index);
   });
@@ -242,6 +232,12 @@ const validateRuleTypeSpecific = (rule, ruleType, index) => {
         throw new Error(`rules.${ruleType}[${index}].url_path for type 'parameter' must be a valid parameter name (alphanumeric, hyphens, underscores only)`);
       }
       break;
+
+    default:
+      throw createConfigError(
+        `rules.${ruleType}[${index}].type '${rule.type}' is not supported`,
+        { ruleType, ruleIndex: index, rule }
+      );
   }
 };
 
@@ -307,6 +303,19 @@ const sanitizeAuthentication = (auth) => {
       value: auth.success_condition.value.trim()
     }
   };
+};
+
+const ensureSafeValue = (value, contextPath) => {
+  if (typeof value !== 'string') return;
+
+  for (const pattern of DANGEROUS_PATTERNS) {
+    if (pattern.test(value)) {
+      throw createConfigError(
+        `${contextPath} contains potentially dangerous pattern`,
+        { contextPath, pattern: pattern.source }
+      );
+    }
+  }
 };
 
 // Additional validation functions are already exported above
